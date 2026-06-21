@@ -1,0 +1,14 @@
+# Data Engineering & Execution Environment
+pyspark>=3.4.0
+pandas>=2.0.0
+kaggle>=1.5.16
+databricks-sdk>=0.20.0
+
+# LLM Orchestration & Agent Framework
+langchain>=0.1.13
+langchain-core>=0.1.33
+langgraph>=0.0.30
+
+# (Optional) specific LLM provider integration. 
+# Update this depending on whether you use Databricks Foundation Models, OpenAI, etc.
+langchain-openai>=0.1.1
