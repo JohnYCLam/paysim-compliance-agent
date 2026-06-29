@@ -1,5 +1,3 @@
-readme_content = """# 🛡️ Agentic AI for AML Compliance Assurance
-
 An enterprise-grade, multi-agent AI system built to automate Anti-Money Laundering (AML) ledger investigations. This project combines a PySpark Medallion data pipeline (Databricks Unity Catalog) with a secure, stateful LangGraph agent architecture.
 
 ## 🎯 Project Motivation
@@ -28,8 +26,10 @@ A stateful workflow designed around the Principle of Least Privilege. The LLM do
 * **Defeated SQL Injection:** Secured all AI-to-Database interactions using PySpark parameterized queries (`args` dictionaries) rather than vulnerable string interpolation.
 * **Circuit Breakers & Rate Limiting:** Engineered an enterprise Python decorator (`@secure_db_tool`) to trip the circuit if the database crashes, stopping the AI from entering infinite loops. It also hard-caps query limits to prevent context window flooding and API cost overruns.
 * **Structured Empty States:** Ensured database tools return consistent JSON schemas (e.g., `NOT_FOUND`) even when data is missing, preventing the orchestrator from panicking and hallucinating errors.
-* **LLM Factory Pattern:** Centralized API authentication and model initialization into a single utility module, strictly separating configuration from execution for future serverless/cloud deployment.
 * **Full-Stack Observability:** Integrated Databricks MLflow autologging to trace LangGraph execution, monitor step-by-step tool latency, and visualize agent routing logic.
+
+##  Demo
+![](docs/images/demo.png)
 
 ## 📂 Repository Structure
 ```text
