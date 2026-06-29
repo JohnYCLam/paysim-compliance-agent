@@ -2,3 +2,6 @@ command:
   - "streamlit"
   - "run"
   - "app.py"
+env:
+  - name: "DATABRICKS_WAREHOUSE_HTTP_PATH"
+    value: "/sql/1.0/warehouses/17ac11a2927cdb52"

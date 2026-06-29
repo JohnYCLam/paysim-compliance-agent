@@ -1,8 +1,9 @@
 # Data Engineering & Execution Environment
-pyspark>=3.4.0
+# pyspark>=3.4.0
 pandas>=2.0.0
 kaggle>=1.5.16
 databricks-sdk>=0.20.0
+databricks-sql-connector>=3.0.0
 
 # LLM Orchestration & Agent Framework
 langchain>=0.1.13

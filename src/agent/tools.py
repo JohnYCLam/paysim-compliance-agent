@@ -1,8 +1,11 @@
-from pyspark.sql import SparkSession
 from langchain_core.tools import tool
 import json
 from functools import wraps
 import time
+import pandas as pd
+from databricks import sql
+import os
+from databricks.sdk.runtime import dbutils
 
 # =====================================================================
 # SECURITY LAYER: State Tracking for Circuit Breaker & Rate Limiter
@@ -14,6 +17,8 @@ SECURITY_STATE = {
     "circuit_open_until": 0,
     "rate_limits": {}
 }
+
+os.environ["DATABRICKS_TOKEN"] = dbutils.secrets.get(scope="portfolio_secret", key="DATABRICKS_TOKEN")
 
 def secure_db_tool(max_calls=3, time_window=30, max_errors=2, timeout_seconds=60):
     """
@@ -72,9 +77,72 @@ def secure_db_tool(max_calls=3, time_window=30, max_errors=2, timeout_seconds=60
         return wrapper
     return decorator
 
+# # Load the data into memory once when the app boots
+# # (Adjust the file paths if your directory structure differs slightly)
+# try:
+#     PROFILES_DF = pd.read_csv("data/risk_profiles.csv")
+#     TRANSACTIONS_DF = pd.read_csv("data/paysim_silver.csv")
+# except FileNotFoundError:
+#     print("Warning: Local data files not found. Ensure the 'data' folder is deployed.")
+#     PROFILES_DF = pd.DataFrame()
+#     TRANSACTIONS_DF = pd.DataFrame()
+
+
+# # ---------------------------------------------------------
+# # TOOL 1: Local Risk Profile Fetcher
+# # --------------------------------------------------------- 
+# @tool
+# def get_customer_risk_profile(account_id: str) -> str:
+#     """
+#     Retrieves the pre-calculated compliance risk profile for a specific customer.
+#     Always use this tool FIRST when asked to audit an account to understand their baseline risk.
+#     """
+#     if PROFILES_DF.empty:
+#         return json.dumps([{"status": "DATABASE_ERROR", "message": "Data files missing."}])
+        
+#     # Standard Pandas filtering instead of SQL
+#     result_df = PROFILES_DF[PROFILES_DF['account_id'] == account_id]
+    
+#     if result_df.empty:
+#         return json.dumps([{"status": "NOT_FOUND", "message": f"No risk profile found for account {account_id}."}])
+        
+#     return result_df.to_json(orient="records")
+
+
+# # ---------------------------------------------------------
+# # TOOL 2: Local Transaction Investigator
+# # ---------------------------------------------------------    
+# @tool
+# def get_recent_transactions(account_id: str, limit: int = 10) -> str:
+#     """
+#     Retrieves the most recent individual transactions for an account.
+#     """
+#     if TRANSACTIONS_DF.empty:
+#         return json.dumps([{"status": "DATABASE_ERROR", "message": "Data files missing."}])
+        
+#     try:
+#         safe_limit = min(abs(int(limit)), 50)
+        
+#         # Filter by account, sort by step (descending), and apply limit
+#         result_df = TRANSACTIONS_DF[TRANSACTIONS_DF['originator_id'] == account_id]
+#         result_df = result_df.sort_values(by='step', ascending=False).head(safe_limit)
+        
+#         # Keep only the relevant columns for the LLM context window
+#         cols_to_keep = ['step', 'tx_type', 'amount', 'beneficiary_id', 'is_high_risk_tx_type', 'orig_balance_discrepancy']
+#         result_df = result_df[cols_to_keep]
+        
+#         if result_df.empty:
+#             return json.dumps([{"status": "NOT_FOUND", "message": f"No recent transactions found for account {account_id}."}])
+            
+#         return result_df.to_json(orient="records")
+        
+#     except Exception as e:
+#         return json.dumps([{"status": "DATABASE_ERROR", "message": f"Execution failed: {str(e)}"}])
+
+
 # ---------------------------------------------------------
-# TOOL 1: The Risk Profile Fetcher
-# ---------------------------------------------------------
+# TOOL 1: The Secure Risk Profile Fetcher
+# --------------------------------------------------------- 
 @tool
 @secure_db_tool(max_calls=3, time_window=30)
 def get_customer_risk_profile(account_id: str) -> str:
@@ -83,27 +151,37 @@ def get_customer_risk_profile(account_id: str) -> str:
     Always use this tool FIRST when asked to audit an account to understand their baseline risk.
     """
     try:
-        # 1. Fetch the active Databricks Spark session
-        spark = SparkSession.builder.getOrCreate()
+        # Establish connection using the container's built-in OAuth service principal keys
+        with sql.connect(
+            server_hostname=os.environ["DATABRICKS_HOST"],
+            http_path=os.environ["DATABRICKS_WAREHOUSE_HTTP_PATH"],
+            access_token=os.environ["DATABRICKS_TOKEN"]
+        ) as connection:
+            
+            with connection.cursor() as cursor:
+                # SECURE: Parameterized execution using DB-API pyformat
+                query = """
+                    SELECT * FROM portfolio_catalog.compliance_project.customer_risk_profiles
+                    WHERE account_id = %(acc_id)s
+                    LIMIT 1
+                """
+                cursor.execute(query, {"acc_id": account_id})
+                result = cursor.fetchall()
+                print(f"🚨 DATABASE TOOL OUTPUT: {result}")
+                
+                # Convert the raw result cursor directly to a Pandas DataFrame
+                df = pd.DataFrame(result, columns=[col[0] for col in cursor.description])
         
-        # SECURE: Using a named parameter placeholder (:acc_id)
-        query = """
-            SELECT * FROM portfolio_catalog.compliance_project.customer_risk_profiles
-            WHERE account_id = :acc_id
-        """
-        
-        # Pass the variable securely to Spark's execution engine
-        df = spark.sql(query, args={"acc_id": account_id}).toPandas()
-        
-        # STRUCTURED EMPTY STATE: Tells the LLM exactly what happened without breaking schema
         if df.empty:
             return json.dumps([{"status": "NOT_FOUND", "message": f"No risk profile found for account {account_id}."}])
             
         return df.to_json(orient="records")
         
     except Exception as e:
-        # Standardized error state
+        error_msg = f"DATABASE_ERROR: {str(e)}"
+        print(f"🚨 DATABASE TOOL CRASH: {error_msg}")
         return json.dumps([{"status": "DATABASE_ERROR", "message": f"Execution failed: {str(e)}"}])
+
 
 # ---------------------------------------------------------
 # TOOL 2: The Secure Transaction Investigator
@@ -117,38 +195,37 @@ def get_recent_transactions(account_id: str, limit: int = 10) -> str:
     or find the exact transaction causing a ledger discrepancy.
     """
     try:
-        # 1. Fetch the active Databricks Spark session
-        spark = SparkSession.builder.getOrCreate()
-
-        # MITIGATION 1: Defeat Agent DoS (Context Flooding)
-        # Force the LLM's requested limit into an integer and hard-cap it at 50.
         safe_limit = min(abs(int(limit)), 50)
         
-        # MITIGATION 2: Defeat SQL Injection
-        # We use a parameterized placeholder (:acc_id) for the untrusted string input.
-        # (Note: safe_limit is safe to use in an f-string because we strictly cast it to an int above)
-        query = f"""
-            SELECT step, tx_type, amount, beneficiary_id, is_high_risk_tx_type, orig_balance_discrepancy
-            FROM portfolio_catalog.compliance_project.paysim_silver
-            WHERE originator_id = :acc_id
-            ORDER BY step DESC
-            LIMIT {safe_limit}
-        """
+        with sql.connect(
+            server_hostname=os.environ["DATABRICKS_HOST"],
+            http_path=os.environ["DATABRICKS_WAREHOUSE_HTTP_PATH"],
+            access_token=os.environ["DATABRICKS_TOKEN"]
+        ) as connection:
+            
+            with connection.cursor() as cursor:
+                # SECURE: Combined parameterized inputs and hard-capped limits
+                query = f"""
+                    SELECT step, tx_type, amount, beneficiary_id, is_high_risk_tx_type, orig_balance_discrepancy
+                    FROM portfolio_catalog.compliance_project.paysim_silver
+                    WHERE originator_id = %(acc_id)s
+                    ORDER BY step DESC
+                    LIMIT {safe_limit}
+                """
+                cursor.execute(query, {"acc_id": account_id})
+                result = cursor.fetchall()
+                
+                df = pd.DataFrame(result, columns=[col[0] for col in cursor.description])
         
-        # Pass the account_id securely into Spark's execution engine
-        df = spark.sql(query, args={"acc_id": account_id}).toPandas()
-        
-        # STRUCTURED EMPTY STATE
         if df.empty:
             return json.dumps([{"status": "NOT_FOUND", "message": f"No recent transactions found for account {account_id}."}])
             
         return df.to_json(orient="records")
         
     except ValueError:
-        # Catch cases where the LLM passes a non-numeric string as the limit
         return json.dumps([{"status": "INVALID_INPUT", "message": "Invalid limit parameter provided. Must be an integer."}])
     except Exception as e:
-        return json.dumps([{"status": "DATABASE_ERROR", "message": f"Execution failed: {str(e)}"}])    
+        return json.dumps([{"status": "DATABASE_ERROR", "message": f"Execution failed: {str(e)}"}])
 # ---------------------------------------------------------
 # TOOL EXPORT
 # ---------------------------------------------------------
