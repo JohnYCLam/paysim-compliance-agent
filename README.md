@@ -80,6 +80,9 @@ databricks secrets list-secrets portfolio_secret
 * **Full-Stack GenAI Tracing:** Solved Service Principal permission lock-outs by routing MLflow tracking to a human-owned workspace directory. Integrated `mlflow.langchain.autolog()` to capture the full visual execution graph, monitor step-by-step tool latency, and visualize agent routing logic.
 
 ##  Demo
+**Agentic AI Workflow**
+![Agentic AI Workflow](docs/images/flow.png)
+
 **Frontend interaction with AI agent**
 ![Frontend Interface](docs/images/demo.png)
 
