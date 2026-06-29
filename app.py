@@ -3,12 +3,22 @@ import sys
 import os
 from langchain_core.messages import HumanMessage
 from langgraph.errors import GraphRecursionError
+import mlflow
 
 # Ensure the app can find the src directory
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 # Import your compiled agent
 from src.agent.graph import compliance_app
+
+# ---------------------------------------------------------
+# MLflow Tracking Configuration
+# ---------------------------------------------------------
+# 📍 NEW: Set a permanent, easy-to-find home for your logs in Databricks
+mlflow.set_experiment("/Users/johnyclam@gmail.com/AML_Agent_Traces")
+
+# 📍 NEW: Turn on automatic tracing for LangChain/LangGraph
+mlflow.langchain.autolog()
 
 # ---------------------------------------------------------
 # UI Configuration
@@ -53,7 +63,7 @@ if prompt := st.chat_input("Enter account ID for a compliance audit (e.g., C1093
                 config = {"recursion_limit": 15}
                 
                 # Execute the graph (This triggers your Guardrails, Supervisor, and Tools)
-                final_state = compliance_app.invoke(initial_state)
+                final_state = compliance_app.invoke(initial_state, config=config)
                 
                 # Extract the final scrubbed output from the Output Guardrail
                 agent_response = final_state["messages"][-1].content
